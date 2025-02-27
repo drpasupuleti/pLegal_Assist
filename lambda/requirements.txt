@@ -1,0 +1,11 @@
+aws_lambda_powertools==3.6.0
+aws-xray-sdk==2.12.1
+boto3==1.36.21
+botocore==1.36.21
+jmespath==1.0.1
+PyPDF2==3.0.1
+python-dateutil==2.9.0.post0
+s3transfer==0.11.2
+six==1.17.0
+typing_extensions==4.12.2
+urllib3==1.26.20
