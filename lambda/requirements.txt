@@ -1,11 +1,11 @@
+# Updated requirements.txt with compatible versions
 aws_lambda_powertools==3.6.0
 aws-xray-sdk==2.12.1
-boto3==1.36.21
-botocore==1.36.21
-jmespath==1.0.1
 PyPDF2==3.0.1
 python-dateutil==2.9.0.post0
-s3transfer==0.11.2
-six==1.17.0
 typing_extensions==4.12.2
-urllib3==1.26.20
+urllib3>=2.0.7,<3.0.0
+aiohttp==3.9.3
+aioboto3>=12.3.0
+aiofiles==23.2.1
+async-timeout==4.0.3
