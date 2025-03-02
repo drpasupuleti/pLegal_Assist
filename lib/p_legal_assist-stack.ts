@@ -45,17 +45,41 @@ export class PLegalAssistStack extends cdk.Stack {
     lambdaRole.addToPolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
       actions: [
-        'bedrock:InvokeModel'
+        'bedrock:InvokeModel',
+        'bedrock:InvokeModelWithResponseStream',
+        'bedrock:CreateInferenceProfile'
       ],
-      resources: ['*']
+      resources: [
+        'arn:aws:bedrock:*::foundation-model/*',
+        'arn:aws:bedrock:*:*:inference-profile/*',
+        'arn:aws:bedrock:*:*:application-inference-profile/*'
+      ]
     }));
+
+
+    // Additional permissions for managing inference profiles
+    lambdaRole.addToPolicy(new iam.PolicyStatement({
+    effect: iam.Effect.ALLOW,
+    actions: [
+      'bedrock:GetInferenceProfile',
+      'bedrock:ListInferenceProfiles',
+      'bedrock:DeleteInferenceProfile',
+      'bedrock:TagResource',
+      'bedrock:UntagResource',
+      'bedrock:ListTagsForResource'
+    ],
+    resources: [
+      'arn:aws:bedrock:*:*:inference-profile/*',
+      'arn:aws:bedrock:*:*:application-inference-profile/*'
+    ]
+  }));
 
     // Add Bedrock Knowledge Base permissions
     lambdaRole.addToPolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
       actions: [
         'bedrock:Retrieve',
-        'bedrock:RetrieveAndGenerate'
+        'bedrock:RetrieveAndGenerate',  // Add this new permission
       ],
       resources: [
         `arn:aws:bedrock:${cdk.Stack.of(this).region}:${cdk.Stack.of(this).account}:knowledge-base/BYASZZZFRM`
