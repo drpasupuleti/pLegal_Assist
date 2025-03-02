@@ -89,7 +89,7 @@ export class PLegalAssistStack extends cdk.Stack {
     // Create Lambda function with local bundling
     const lambdaFn = new lambda.Function(this, 'PLegalAssistFunction', {
       runtime: lambda.Runtime.PYTHON_3_9,
-      handler: 'lambda_function.lambda_handler',
+      handler: 'lambda_handlers.lambda_handler',  // Updated handler
       code: lambda.Code.fromAsset(path.join(__dirname, '../lambda'), {
         bundling: {
           image: lambda.Runtime.PYTHON_3_9.bundlingImage,
@@ -106,16 +106,24 @@ export class PLegalAssistStack extends cdk.Stack {
                 return false;
               }
 
-              // Copy Lambda function code
-              const copy = spawnSync('cp', [
-                '-r',
-                path.join(__dirname, '../lambda/lambda_function.py'),
-                outputDir
-              ]);
-
-              if (copy.error || copy.status !== 0) {
-                console.error('Failed to copy Lambda code:', copy.error || copy.stderr.toString());
-                return false;
+              // Copy all Python files
+              const pythonFiles = [
+                'lambda_handlers.py',
+                'eb1a_processor.py',
+                'resume_analyzer.py',
+                'kb_retriever.py'
+              ];
+              
+              for (const file of pythonFiles) {
+                const copy = spawnSync('cp', [
+                  path.join(__dirname, '../lambda', file),
+                  outputDir
+                ]);
+                
+                if (copy.error || copy.status !== 0) {
+                  console.error(`Failed to copy ${file}:`, copy.error || copy.stderr.toString());
+                  return false;
+                }
               }
 
               return true;
@@ -123,7 +131,7 @@ export class PLegalAssistStack extends cdk.Stack {
           },
           command: [
             'bash', '-c',
-            'pip install -r requirements.txt -t /asset-output && cp -au . /asset-output'
+            'pip install -r requirements.txt -t /asset-output && cp lambda_handlers.py eb1a_processor.py resume_analyzer.py kb_retriever.py /asset-output/'
           ]
         }
       }),
