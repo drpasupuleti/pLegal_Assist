@@ -4,6 +4,9 @@ import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as logs from 'aws-cdk-lib/aws-logs';
+import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
+import * as tasks from 'aws-cdk-lib/aws-stepfunctions-tasks';
 import * as path from 'path';
 import { spawnSync } from 'child_process';
 
@@ -31,6 +34,24 @@ export class PLegalAssistStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.DESTROY
     });
 
+    // S3 bucket for raw documents - moved up to make it available for both Lambdas
+    const rawDocumentsBucket = new s3.Bucket(this, 'RawDocumentsBucket', {
+      versioned: true,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      lifecycleRules: [
+        {
+          id: 'ArchiveAfter90Days',
+          transitions: [
+            {
+              storageClass: s3.StorageClass.INFREQUENT_ACCESS,
+              transitionAfter: cdk.Duration.days(90)
+            }
+          ]
+        }
+      ]
+    });
+
     // Create Lambda IAM role
     const lambdaRole = new iam.Role(this, 'PLegalAssistLambdaRole', {
       assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
@@ -40,6 +61,19 @@ export class PLegalAssistStack extends cdk.Stack {
     lambdaRole.addManagedPolicy(
         iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole')
     );
+
+    // Add S3 access to the main Lambda role
+    lambdaRole.addToPolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: [
+        's3:GetObject',
+        's3:ListBucket'
+      ],
+      resources: [
+        rawDocumentsBucket.bucketArn,
+        `${rawDocumentsBucket.bucketArn}/*`
+      ]
+    }));
 
     // Add Bedrock model invocation permissions
     lambdaRole.addToPolicy(new iam.PolicyStatement({
@@ -56,40 +90,39 @@ export class PLegalAssistStack extends cdk.Stack {
       ]
     }));
 
-
     // Additional permissions for managing inference profiles
     lambdaRole.addToPolicy(new iam.PolicyStatement({
-    effect: iam.Effect.ALLOW,
-    actions: [
-      'bedrock:GetInferenceProfile',
-      'bedrock:ListInferenceProfiles',
-      'bedrock:DeleteInferenceProfile',
-      'bedrock:TagResource',
-      'bedrock:UntagResource',
-      'bedrock:ListTagsForResource'
-    ],
-    resources: [
-      'arn:aws:bedrock:*:*:inference-profile/*',
-      'arn:aws:bedrock:*:*:application-inference-profile/*'
-    ]
-  }));
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'bedrock:GetInferenceProfile',
+        'bedrock:ListInferenceProfiles',
+        'bedrock:DeleteInferenceProfile',
+        'bedrock:TagResource',
+        'bedrock:UntagResource',
+        'bedrock:ListTagsForResource'
+      ],
+      resources: [
+        'arn:aws:bedrock:*:*:inference-profile/*',
+        'arn:aws:bedrock:*:*:application-inference-profile/*'
+      ]
+    }));
 
     // Add Bedrock Knowledge Base permissions
     lambdaRole.addToPolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
       actions: [
         'bedrock:Retrieve',
-        'bedrock:RetrieveAndGenerate',  // Add this new permission
+        'bedrock:RetrieveAndGenerate',
       ],
       resources: [
         `arn:aws:bedrock:${cdk.Stack.of(this).region}:${cdk.Stack.of(this).account}:knowledge-base/BYASZZZFRM`
       ]
     }));
 
-    // Create Lambda function with local bundling
+    // Create Lambda function with local bundling - including retrieval_function.py
     const lambdaFn = new lambda.Function(this, 'PLegalAssistFunction', {
       runtime: lambda.Runtime.PYTHON_3_9,
-      handler: 'lambda_handlers.lambda_handler',  // Updated handler
+      handler: 'lambda_handlers.lambda_handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '../lambda'), {
         bundling: {
           image: lambda.Runtime.PYTHON_3_9.bundlingImage,
@@ -106,12 +139,13 @@ export class PLegalAssistStack extends cdk.Stack {
                 return false;
               }
 
-              // Copy all Python files
+              // Copy all Python files - add retrieval_function.py to the list
               const pythonFiles = [
                 'lambda_handlers.py',
                 'eb1a_processor.py',
                 'resume_analyzer.py',
-                'kb_retriever.py'
+                'kb_retriever.py',
+                'retrieval_function.py'  // Added the new file
               ];
               
               for (const file of pythonFiles) {
@@ -131,7 +165,7 @@ export class PLegalAssistStack extends cdk.Stack {
           },
           command: [
             'bash', '-c',
-            'pip install -r requirements.txt -t /asset-output && cp lambda_handlers.py eb1a_processor.py resume_analyzer.py kb_retriever.py /asset-output/'
+            'pip install -r requirements.txt -t /asset-output && cp lambda_handlers.py eb1a_processor.py resume_analyzer.py kb_retriever.py retrieval_function.py /asset-output/'
           ]
         }
       }),
@@ -241,6 +275,72 @@ export class PLegalAssistStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'ApiUrl', {
       value: api.url,
       description: 'API Gateway endpoint URL'
+    });
+
+    // Create IAM role for Document Retrieval Lambda
+    const documentRetrievalRole = new iam.Role(this, 'DocumentRetrievalRole', {
+      assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
+      managedPolicies: [
+        iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole')
+      ]
+    });
+
+    // Add S3 write permissions
+    documentRetrievalRole.addToPolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: [
+        's3:PutObject',
+        's3:GetObject',
+        's3:PutObjectTagging'
+      ],
+      resources: [
+        `${rawDocumentsBucket.bucketArn}/*`,
+        rawDocumentsBucket.bucketArn
+      ]
+    }));
+
+    // Create the Document Retrieval Lambda (using the same lambda folder)
+    const documentRetrievalLambda = new lambda.Function(this, 'DocumentRetrievalLambda', {
+      runtime: lambda.Runtime.PYTHON_3_9,
+      handler: 'retrieval_function.handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, '../lambda')),  // Use existing lambda folder
+      timeout: cdk.Duration.minutes(15),
+      memorySize: 1024,
+      role: documentRetrievalRole,
+      environment: {
+        RAW_BUCKET_NAME: rawDocumentsBucket.bucketName
+      }
+    });
+
+   // Create Step Functions tasks
+const retrieveDocumentsTask = new tasks.LambdaInvoke(this, 'RetrieveDocuments', {
+  lambdaFunction: documentRetrievalLambda,
+  outputPath: '$.Payload'
+});
+
+// Create success and failure states
+const successState = new sfn.Succeed(this, 'DocumentRetrievalSuccess');
+const failureState = new sfn.Fail(this, 'DocumentRetrievalFailure', {
+  cause: 'Document retrieval task failed',
+  error: 'RetrievalError'
+});
+
+// Create the state machine definition using proper catch syntax
+// This properly connects the addCatch and ensures compilation
+const definition = retrieveDocumentsTask
+  .addCatch(failureState)  // Add the catch first
+  .next(successState);     // Then chain to success state
+
+// Create the state machine
+const documentRetrievalStateMachine = new sfn.StateMachine(this, 'DocumentRetrievalWorkflow', {
+  definition,
+  timeout: cdk.Duration.minutes(15)
+});
+
+    // Output the state machine ARN
+    new cdk.CfnOutput(this, 'DocumentRetrievalStateMachineArn', {
+      value: documentRetrievalStateMachine.stateMachineArn,
+      description: 'Document retrieval state machine ARN'
     });
   }
 }
