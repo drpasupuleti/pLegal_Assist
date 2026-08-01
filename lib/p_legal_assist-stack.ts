@@ -469,5 +469,7 @@ export class PLegalAssistStack extends cdk.Stack {
       value: multiMonthRetrievalLambda.functionArn,
       description: 'Multi-Month Document Retrieval Lambda ARN'
     });
+
+    
   }
 }
